@@ -15,16 +15,22 @@ from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
+from homeassistant.components.recorder.models import StatisticMetaData, StatisticMeanType
+from homeassistant.components.recorder.statistics import async_add_external_statistics
+
 from .const import (
     DOMAIN,
     CONF_USERNAME,
     CONF_PASSWORD,
     CONF_ELECTROMETER_ID,
+    CONF_HISTORY_IMPORTED,
     DEFAULT_SCAN_INTERVAL_REALTIME_MIN,
     DEFAULT_SCAN_INTERVAL_DAILY_MIN,
     DEFAULT_SCAN_INTERVAL_SIGNALS_MIN,
     parse_cz_datetime,
     DEFAULT_SCAN_INTERVAL_OUTAGES_MIN,
+    HISTORY_DAYS,
+    HISTORY_DAILY_CHUNK_DAYS,
 )
 from .rest_client.dip_client import CezDistribuceRestClient
 from .rest_client.pnd_client import CezPndRestClient
@@ -112,6 +118,264 @@ def _is_nt_interval(timestamp_str: str, signals_data: Dict[str, Any]) -> bool:
             if sdt < interval_end and edt > interval_start:
                 return True
     return False
+
+
+async def async_import_history(
+    hass: HomeAssistant,
+    pnd_client: CezPndRestClient,
+    electrometer_id: str,
+) -> None:
+    """Fetch 90 days of historical data from PND and inject into HA long-term statistics.
+
+    Creates six external statistic series:
+    - 3 from daily endpoint: cumulative NT, VT, Total (kWh)
+    - 3 from interval endpoint: total energy (kWh), mean power (kW), max power (kW)
+    """
+
+    def _fetch_history() -> Dict[str, Any]:
+        today = dt.date.today()
+        start = today - dt.timedelta(days=HISTORY_DAYS)
+
+        # --- Daily data (chunked into 30-day requests) ---
+        all_daily_raw: List[Dict[str, Any]] = []
+        chunk_start = start
+        while chunk_start < today:
+            chunk_end = min(chunk_start + dt.timedelta(days=HISTORY_DAILY_CHUNK_DAYS), today)
+            _LOGGER.info(
+                "History import: fetching daily data %s -> %s",
+                chunk_start, chunk_end,
+            )
+            try:
+                raw = pnd_client.get_daily_data(electrometer_id, chunk_start, chunk_end)
+                all_daily_raw.append(raw)
+            except Exception as e:
+                _LOGGER.warning("History import: daily chunk %s->%s failed: %s", chunk_start, chunk_end, e)
+            chunk_start = chunk_end
+
+        # --- Interval data (day by day) ---
+        all_interval_raw: List[Dict[str, Any]] = []
+        day = start
+        while day < today:
+            next_day = day + dt.timedelta(days=1)
+            try:
+                raw = pnd_client.get_interval_data(electrometer_id, day, next_day)
+                all_interval_raw.append(raw)
+            except Exception as e:
+                _LOGGER.warning("History import: interval day %s failed: %s", day, e)
+            day = next_day
+            if (day - start).days % 10 == 0:
+                _LOGGER.info("History import: fetched intervals for %d/%d days", (day - start).days, HISTORY_DAYS)
+
+        return {"daily": all_daily_raw, "intervals": all_interval_raw}
+
+    raw_data = await hass.async_add_executor_job(_fetch_history)
+
+    # --- Build daily statistics (NT, VT, Total) ---
+    daily_points = _build_daily_statistics(raw_data["daily"])
+
+    # --- Build interval statistics (total kWh, mean kW, max kW) ---
+    interval_points = _build_interval_statistics(raw_data["intervals"])
+
+    eid = electrometer_id
+
+    # Import daily series
+    for key, name in [("nt", "ČEZ Historical NT"), ("vt", "ČEZ Historical VT"), ("total", "ČEZ Historical Total")]:
+        stats = daily_points.get(key, [])
+        if not stats:
+            continue
+        _LOGGER.info("History import: injecting %d hourly points for daily_%s", len(stats), key)
+        async_add_external_statistics(
+            hass,
+            StatisticMetaData(
+                has_mean=False,
+                has_sum=True,
+                name=name,
+                source=DOMAIN,
+                statistic_id=f"{DOMAIN}:{eid}_daily_{key}",
+                unit_of_measurement="kWh",
+                mean_type=StatisticMeanType.NONE,
+            ),
+            stats,
+        )
+
+    # Import interval energy series
+    if interval_points.get("energy"):
+        _LOGGER.info("History import: injecting %d hourly points for interval_total", len(interval_points["energy"]))
+        async_add_external_statistics(
+            hass,
+            StatisticMetaData(
+                has_mean=False,
+                has_sum=True,
+                name="ČEZ Historical Interval Total",
+                source=DOMAIN,
+                statistic_id=f"{DOMAIN}:{eid}_interval_total",
+                unit_of_measurement="kWh",
+                mean_type=StatisticMeanType.NONE,
+            ),
+            interval_points["energy"],
+        )
+
+    # Import interval mean power series
+    if interval_points.get("power_mean"):
+        _LOGGER.info("History import: injecting %d hourly points for interval_power_mean", len(interval_points["power_mean"]))
+        async_add_external_statistics(
+            hass,
+            StatisticMetaData(
+                has_mean=True,
+                has_sum=False,
+                name="ČEZ Historical Interval Power Mean",
+                source=DOMAIN,
+                statistic_id=f"{DOMAIN}:{eid}_interval_power_mean",
+                unit_of_measurement="kW",
+                mean_type=StatisticMeanType.ARITHMETIC,
+            ),
+            interval_points["power_mean"],
+        )
+
+    # Import interval max power series
+    if interval_points.get("power_max"):
+        _LOGGER.info("History import: injecting %d hourly points for interval_power_max", len(interval_points["power_max"]))
+        async_add_external_statistics(
+            hass,
+            StatisticMetaData(
+                has_mean=False,
+                has_sum=False,
+                name="ČEZ Historical Interval Power Max",
+                source=DOMAIN,
+                statistic_id=f"{DOMAIN}:{eid}_interval_power_max",
+                unit_of_measurement="kW",
+                mean_type=StatisticMeanType.NONE,
+            ),
+            interval_points["power_max"],
+        )
+
+    _LOGGER.info("History import: complete for electrometer %s", eid)
+
+
+def _build_daily_statistics(
+    daily_raw_list: List[Dict[str, Any]],
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Convert daily API responses into hourly StatisticData dicts for HA.
+
+    Daily endpoint returns cumulative meter readings per day.
+    We assign each day's reading to midnight (UTC-aware) and compute sum
+    as the delta from the first reading.
+    """
+    import zoneinfo
+    tz = zoneinfo.ZoneInfo("Europe/Prague")
+
+    raw_by_series: Dict[str, List[tuple]] = {"nt": [], "vt": [], "total": []}
+
+    for raw in daily_raw_list:
+        if not raw.get("hasData"):
+            continue
+        for series in raw.get("series", []):
+            name = series.get("name", "")
+            data = series.get("data", [])
+            if "+E_NT/" in name:
+                key = "nt"
+            elif "+E_VT/" in name:
+                key = "vt"
+            elif "-E/" in name:
+                continue
+            elif "+E/" in name:
+                key = "total"
+            else:
+                continue
+            for entry in data:
+                if len(entry) >= 2:
+                    try:
+                        ts = parse_cz_datetime(entry[0])
+                        val = float(entry[1])
+                        raw_by_series[key].append((ts, val))
+                    except (ValueError, TypeError):
+                        continue
+
+    result: Dict[str, List[Dict[str, Any]]] = {}
+    for key, points in raw_by_series.items():
+        if not points:
+            continue
+        points.sort(key=lambda x: x[0])
+        first_value = points[0][1]
+        stats = []
+        for ts, cumulative in points:
+            hour_start = dt.datetime(ts.year, ts.month, ts.day, tzinfo=tz)
+            stats.append({
+                "start": hour_start,
+                "state": round(cumulative, 3),
+                "sum": round(cumulative - first_value, 3),
+            })
+        result[key] = stats
+
+    return result
+
+
+def _build_interval_statistics(
+    interval_raw_list: List[Dict[str, Any]],
+) -> Dict[str, List[Dict[str, Any]]]:
+    """Convert interval API responses into hourly StatisticData dicts for HA.
+
+    Groups 15-min kW intervals into hourly buckets and computes:
+    - energy: cumulative kWh (sum) and hourly kWh (state)
+    - power_mean: mean kW per hour
+    - power_max: max kW per hour
+    """
+    import zoneinfo
+    tz = zoneinfo.ZoneInfo("Europe/Prague")
+
+    all_intervals: List[Dict[str, Any]] = []
+    for raw in interval_raw_list:
+        all_intervals.extend(CezPndRestClient.parse_interval_series(raw))
+
+    if not all_intervals:
+        return {}
+
+    # Group by hour (timestamp is end of 15-min interval, so subtract to get start)
+    hourly: Dict[dt.datetime, List[float]] = {}
+    for iv in all_intervals:
+        try:
+            ts_end = parse_cz_datetime(iv["timestamp"])
+        except (ValueError, TypeError):
+            continue
+        ts_start = ts_end - dt.timedelta(minutes=1)
+        hour_start = dt.datetime(ts_start.year, ts_start.month, ts_start.day, ts_start.hour, tzinfo=tz)
+        hourly.setdefault(hour_start, []).append(iv["kw"])
+
+    sorted_hours = sorted(hourly.keys())
+    if not sorted_hours:
+        return {}
+
+    energy_stats = []
+    power_mean_stats = []
+    power_max_stats = []
+    cumulative_kwh = 0.0
+
+    for hour in sorted_hours:
+        kw_values = hourly[hour]
+        hourly_kwh = sum(kw * 0.25 for kw in kw_values)
+        cumulative_kwh += hourly_kwh
+        mean_kw = sum(kw_values) / len(kw_values) if kw_values else 0.0
+        max_kw = max(kw_values) if kw_values else 0.0
+
+        energy_stats.append({
+            "start": hour,
+            "state": round(hourly_kwh, 3),
+            "sum": round(cumulative_kwh, 3),
+        })
+        power_mean_stats.append({
+            "start": hour,
+            "mean": round(mean_kw, 3),
+        })
+        power_max_stats.append({
+            "start": hour,
+            "max": round(max_kw, 3),
+        })
+
+    return {
+        "energy": energy_stats,
+        "power_mean": power_mean_stats,
+        "power_max": power_max_stats,
+    }
 
 
 class CezEnergyHub:

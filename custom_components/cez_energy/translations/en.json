@@ -10,7 +10,17 @@
           "password": "Password",
           "electrometer_id": "Electrometer ID"
         }
+      },
+      "import": {
+        "title": "Importing historical data",
+        "description": "Importing 3 months of energy data from ČEZ. This may take a few minutes..."
+      },
+      "finish": {
+        "title": "Setup complete"
       }
+    },
+    "progress": {
+      "import_history": "Importing 3 months of historical energy data from ČEZ portal..."
     },
     "error": {
       "invalid_auth": "Invalid username or password.",

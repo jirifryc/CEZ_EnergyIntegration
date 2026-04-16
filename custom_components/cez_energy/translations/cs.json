@@ -10,7 +10,17 @@
           "password": "Heslo",
           "electrometer_id": "Číslo elektroměru"
         }
+      },
+      "import": {
+        "title": "Importování historických dat",
+        "description": "Importování 3 měsíců dat o spotřebě z ČEZ. Může to trvat několik minut..."
+      },
+      "finish": {
+        "title": "Nastavení dokončeno"
       }
+    },
+    "progress": {
+      "import_history": "Importování 3 měsíců historických dat o spotřebě z portálu ČEZ..."
     },
     "error": {
       "invalid_auth": "Neplatné uživatelské jméno nebo heslo.",

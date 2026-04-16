@@ -137,5 +137,30 @@ def _setup_ha_mocks():
     ha_def = _make_module("homeassistant.data_entry_flow", FlowResult=dict)
     sys.modules["homeassistant.data_entry_flow"] = ha_def
 
+    # homeassistant.components.recorder (for statistics import)
+    class FakeStatisticMeanType:
+        NONE = 0
+        ARITHMETIC = 1
+        CIRCULAR = 2
+
+    class FakeStatisticMetaData:
+        def __init__(self, **kwargs):
+            for k, v in kwargs.items():
+                setattr(self, k, v)
+
+    ha_recorder = _make_module("homeassistant.components.recorder")
+    ha_recorder_models = _make_module(
+        "homeassistant.components.recorder.models",
+        StatisticMetaData=FakeStatisticMetaData,
+        StatisticMeanType=FakeStatisticMeanType,
+    )
+    ha_recorder_statistics = _make_module(
+        "homeassistant.components.recorder.statistics",
+        async_add_external_statistics=MagicMock(),
+    )
+    sys.modules["homeassistant.components.recorder"] = ha_recorder
+    sys.modules["homeassistant.components.recorder.models"] = ha_recorder_models
+    sys.modules["homeassistant.components.recorder.statistics"] = ha_recorder_statistics
+
 
 _setup_ha_mocks()

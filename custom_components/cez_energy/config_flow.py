@@ -1,7 +1,8 @@
 """Config Flow for ČEZ Energy integration.
 
 Collects ČEZ credentials and electrometer ID, validates login to both
-PND and DIP portals before creating the config entry.
+PND and DIP portals, imports 3 months of historical data, then creates
+the config entry.
 """
 from __future__ import annotations
 
@@ -13,7 +14,13 @@ from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResult
 
-from .const import DOMAIN, CONF_USERNAME, CONF_PASSWORD, CONF_ELECTROMETER_ID
+from .const import (
+    DOMAIN,
+    CONF_USERNAME,
+    CONF_PASSWORD,
+    CONF_ELECTROMETER_ID,
+    CONF_HISTORY_IMPORTED,
+)
 from .rest_client.dip_client import CezDistribuceRestClient
 from .rest_client.pnd_client import CezPndRestClient
 
@@ -61,6 +68,10 @@ async def _validate_credentials(
 class CezEnergyConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     VERSION = 1
 
+    def __init__(self) -> None:
+        super().__init__()
+        self._user_input: Dict[str, Any] = {}
+
     async def async_step_user(
         self, user_input: Optional[Dict[str, Any]] = None
     ) -> FlowResult:
@@ -77,16 +88,59 @@ class CezEnergyConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             if error is None:
                 await self.async_set_unique_id(f"{username}_{electrometer_id}")
                 self._abort_if_unique_id_configured()
-                return self.async_create_entry(
-                    title=f"ČEZ Energy ({electrometer_id})",
-                    data={
-                        CONF_USERNAME: username,
-                        CONF_PASSWORD: password,
-                        CONF_ELECTROMETER_ID: electrometer_id,
-                    },
-                )
+
+                self._user_input = {
+                    CONF_USERNAME: username,
+                    CONF_PASSWORD: password,
+                    CONF_ELECTROMETER_ID: electrometer_id,
+                }
+                return await self.async_step_import()
             errors["base"] = error
 
         return self.async_show_form(
             step_id="user", data_schema=DATA_SCHEMA, errors=errors
+        )
+
+    async def async_step_import(
+        self, user_input: Optional[Dict[str, Any]] = None,
+    ) -> FlowResult:
+        """Show a progress indicator while importing 3 months of historical data."""
+        if not hasattr(self, "_import_task"):
+            self._import_task = self.hass.async_create_task(
+                self._do_import()
+            )
+            return self.async_show_progress(
+                step_id="import",
+                progress_action="import_history",
+            )
+
+        try:
+            await self._import_task
+        except Exception as e:
+            _LOGGER.warning("History import failed, continuing without it: %s", e)
+
+        return self.async_show_progress_done(next_step_id="finish")
+
+    async def _do_import(self) -> None:
+        """Run the historical data import in background."""
+        from . import async_import_history
+
+        username = self._user_input[CONF_USERNAME]
+        password = self._user_input[CONF_PASSWORD]
+        electrometer_id = self._user_input[CONF_ELECTROMETER_ID]
+
+        pnd = CezPndRestClient()
+        await self.hass.async_add_executor_job(pnd.login, username, password)
+        await async_import_history(self.hass, pnd, electrometer_id)
+
+    async def async_step_finish(
+        self, user_input: Optional[Dict[str, Any]] = None,
+    ) -> FlowResult:
+        """Create the config entry after import is done."""
+        return self.async_create_entry(
+            title=f"ČEZ Energy ({self._user_input[CONF_ELECTROMETER_ID]})",
+            data={
+                **self._user_input,
+                CONF_HISTORY_IMPORTED: True,
+            },
         )
