@@ -126,46 +126,45 @@ async def async_import_history(
     pnd_client: CezPndRestClient,
     electrometer_id: str,
 ) -> None:
-    """Fetch 90 days of historical data from PND and inject into HA long-term statistics.
+    """Fetch historical data from PND and inject into HA long-term statistics.
 
     Creates six external statistic series:
     - 3 from daily endpoint: cumulative NT, VT, Total (kWh)
     - 3 from interval endpoint: total energy (kWh), mean power (kW), max power (kW)
+
+    Fetches data in chunks of HISTORY_DAILY_CHUNK_DAYS to avoid overloading the API.
     """
 
     def _fetch_history() -> Dict[str, Any]:
         today = dt.date.today()
         start = today - dt.timedelta(days=HISTORY_DAYS)
+        chunk = dt.timedelta(days=HISTORY_DAILY_CHUNK_DAYS)
 
-        # --- Daily data (chunked into 30-day requests) ---
         all_daily_raw: List[Dict[str, Any]] = []
+        all_interval_raw: List[Dict[str, Any]] = []
+
         chunk_start = start
         while chunk_start < today:
-            chunk_end = min(chunk_start + dt.timedelta(days=HISTORY_DAILY_CHUNK_DAYS), today)
+            chunk_end = min(chunk_start + chunk, today)
             _LOGGER.info(
-                "History import: fetching daily data %s -> %s",
+                "History import: fetching %s -> %s (%d/%d days)",
                 chunk_start, chunk_end,
+                (chunk_end - start).days, HISTORY_DAYS,
             )
+
             try:
                 raw = pnd_client.get_daily_data(electrometer_id, chunk_start, chunk_end)
                 all_daily_raw.append(raw)
             except Exception as e:
-                _LOGGER.warning("History import: daily chunk %s->%s failed: %s", chunk_start, chunk_end, e)
-            chunk_start = chunk_end
+                _LOGGER.warning("History import: daily %s->%s failed: %s", chunk_start, chunk_end, e)
 
-        # --- Interval data (day by day) ---
-        all_interval_raw: List[Dict[str, Any]] = []
-        day = start
-        while day < today:
-            next_day = day + dt.timedelta(days=1)
             try:
-                raw = pnd_client.get_interval_data(electrometer_id, day, next_day)
+                raw = pnd_client.get_interval_data(electrometer_id, chunk_start, chunk_end)
                 all_interval_raw.append(raw)
             except Exception as e:
-                _LOGGER.warning("History import: interval day %s failed: %s", day, e)
-            day = next_day
-            if (day - start).days % 10 == 0:
-                _LOGGER.info("History import: fetched intervals for %d/%d days", (day - start).days, HISTORY_DAYS)
+                _LOGGER.warning("History import: interval %s->%s failed: %s", chunk_start, chunk_end, e)
+
+            chunk_start = chunk_end
 
         return {"daily": all_daily_raw, "intervals": all_interval_raw}
 
@@ -632,7 +631,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data[DOMAIN][entry.entry_id] = hub
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    if not data.get(CONF_HISTORY_IMPORTED):
+        hass.async_create_task(_background_history_import(hass, hub, entry))
+
     return True
+
+
+async def _background_history_import(
+    hass: HomeAssistant, hub: CezEnergyHub, entry: ConfigEntry,
+) -> None:
+    """Run historical data import in the background after the integration is fully loaded."""
+    try:
+        _LOGGER.info("Starting background history import for %s", hub.electrometer_id)
+        await async_import_history(hass, hub._pnd_client, hub.electrometer_id)
+        new_data = {**entry.data, CONF_HISTORY_IMPORTED: True}
+        hass.config_entries.async_update_entry(entry, data=new_data)
+        _LOGGER.info("Background history import completed for %s", hub.electrometer_id)
+    except Exception:
+        _LOGGER.exception("Background history import failed — will retry on next restart")
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

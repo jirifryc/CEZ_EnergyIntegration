@@ -279,19 +279,12 @@ class TestHistoryImportLive:
 
     @skip_no_electrometer
     def test_fetch_and_build_interval_statistics(self, pnd_client):
-        """Fetch 3 days of interval data and verify statistics structure."""
+        """Fetch 3 days of interval data in a single request and verify statistics."""
         today = dt.date.today()
         three_days_ago = today - dt.timedelta(days=3)
 
-        all_raw = []
-        day = three_days_ago
-        while day < today:
-            next_day = day + dt.timedelta(days=1)
-            raw = pnd_client.get_interval_data(ELECTROMETER_ID, day, next_day)
-            all_raw.append(raw)
-            day = next_day
-
-        result = _build_interval_statistics(all_raw)
+        raw = pnd_client.get_interval_data(ELECTROMETER_ID, three_days_ago, today)
+        result = _build_interval_statistics([raw])
 
         assert "energy" in result
         assert "power_mean" in result
