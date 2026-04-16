@@ -1,0 +1,20 @@
+{
+  "config": {
+    "title": "ČEZ Energy",
+    "step": {
+      "user": {
+        "title": "Connect to ČEZ Energy",
+        "description": "Enter your ČEZ portal credentials and electrometer ID.",
+        "data": {
+          "username": "Username",
+          "password": "Password",
+          "electrometer_id": "Electrometer ID"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Invalid username or password.",
+      "cannot_connect": "Failed to connect to the service. Try again later."
+    }
+  }
+}

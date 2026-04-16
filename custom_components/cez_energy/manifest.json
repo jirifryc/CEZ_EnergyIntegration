@@ -1,0 +1,18 @@
+{
+	"domain": "cez_energy",
+	"name": "ČEZ Energy",
+	"codeowners": [],
+	"config_flow": true,
+	"documentation": "https://github.com/",
+	"integration_type": "hub",
+	"iot_class": "cloud_polling",
+	"issue_tracker": "https://github.com/",
+	"loggers": [
+		"custom_components.cez_energy"
+	],
+	"requirements": [
+		"beautifulsoup4>=4.12.0",
+		"requests>=2.32.0"
+	],
+	"version": "0.1.0"
+}

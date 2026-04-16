@@ -1,0 +1,20 @@
+{
+  "config": {
+    "title": "ČEZ Energy",
+    "step": {
+      "user": {
+        "title": "Připojení k ČEZ Energy",
+        "description": "Zadejte přihlašovací údaje a číslo elektroměru.",
+        "data": {
+          "username": "Uživatelské jméno",
+          "password": "Heslo",
+          "electrometer_id": "Číslo elektroměru"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Neplatné uživatelské jméno nebo heslo.",
+      "cannot_connect": "Nepodařilo se připojit ke službě. Zkuste to prosím později."
+    }
+  }
+}
