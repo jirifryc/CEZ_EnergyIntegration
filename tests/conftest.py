@@ -48,6 +48,22 @@ def _setup_ha_mocks():
     ha_typing = _make_module("homeassistant.helpers.typing", ConfigType=dict)
     sys.modules["homeassistant.helpers.typing"] = ha_typing
 
+    class FakeDeviceInfo(dict):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            for k, v in kwargs.items():
+                setattr(self, k, v)
+
+    ha_device_registry = _make_module(
+        "homeassistant.helpers.device_registry",
+        DeviceInfo=FakeDeviceInfo,
+        DeviceEntryType=SimpleNamespace(SERVICE="service"),
+    )
+    sys.modules["homeassistant.helpers.device_registry"] = ha_device_registry
+
+    ha_entity = _make_module("homeassistant.helpers.entity")
+    sys.modules["homeassistant.helpers.entity"] = ha_entity
+
     # DataUpdateCoordinator
     class FakeCoordinator:
         def __init__(self, *a, **kw):

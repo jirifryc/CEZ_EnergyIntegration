@@ -39,6 +39,7 @@ class CezOutageCalendar(CoordinatorEntity, CalendarEntity):
         self._ean = ean
         self._attr_name = "ČEZ Odstávky"
         self._attr_unique_id = f"{ean}_outages_calendar"
+        self._attr_device_info = hub.device_info
 
     @property
     def event(self) -> Optional[CalendarEvent]:
@@ -136,6 +137,7 @@ class CezCurrentSignalCalendar(CoordinatorEntity, CalendarEntity):
         self._ean = ean
         self._attr_name = "HDO \u2013 aktuální signál"
         self._attr_unique_id = f"{ean}_current_signal_calendar"
+        self._attr_device_info = hub.device_info
 
     @property
     def event(self) -> Optional[CalendarEvent]:

@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from homeassistant.components.recorder.models import StatisticMetaData, StatisticMeanType
@@ -413,6 +414,16 @@ class CezEnergyHub:
         except Exception:
             pass
         return None
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return DeviceInfo(
+            identifiers={(DOMAIN, self.electrometer_id)},
+            name=f"Elektroměr {self.electrometer_id}",
+            manufacturer="ČEZ Distribuce",
+            model="Elektroměr",
+            entry_type="service",
+        )
 
     async def _login_and_load(self) -> None:
         def _blocking():

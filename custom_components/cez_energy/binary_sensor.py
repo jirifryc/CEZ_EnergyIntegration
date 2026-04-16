@@ -39,6 +39,7 @@ class CezLowTariffBinarySensor(CoordinatorEntity, BinarySensorEntity):
         self._ean = ean
         self._attr_name = "ČEZ Nízký tarif (NT)"
         self._attr_unique_id = f"{ean}_low_tariff_active"
+        self._attr_device_info = hub.device_info
 
     @property
     def is_on(self) -> Optional[bool]:

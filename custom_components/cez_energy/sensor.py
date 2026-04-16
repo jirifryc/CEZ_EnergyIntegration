@@ -59,6 +59,7 @@ class CezCumulativeEnergySensor(CoordinatorEntity, SensorEntity):
         self._kind = kind
         self._attr_name = name
         self._attr_unique_id = unique_id
+        self._attr_device_info = hub.device_info
 
     @property
     def native_value(self) -> Optional[float]:
@@ -102,6 +103,7 @@ class CezTodayEnergySensor(CoordinatorEntity, SensorEntity):
         self._kind = kind
         self._attr_name = name
         self._attr_unique_id = unique_id
+        self._attr_device_info = hub.device_info
 
     @property
     def native_value(self) -> Optional[float]:
@@ -138,6 +140,7 @@ class CezCurrentPowerSensor(CoordinatorEntity, SensorEntity):
         self._hub = hub
         self._attr_name = "ČEZ Aktuální výkon"
         self._attr_unique_id = f"{electrometer_id}_current_power"
+        self._attr_device_info = hub.device_info
 
     @property
     def native_value(self) -> Optional[float]:
