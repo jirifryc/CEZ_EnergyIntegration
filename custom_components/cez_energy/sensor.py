@@ -8,7 +8,7 @@ endpoint when available, with intraday estimates from 15-min data added on top.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -16,7 +16,7 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.const import UnitOfEnergy, UnitOfPower
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import CezEnergyHub, DailyData, RealtimeData
@@ -40,7 +40,13 @@ async def async_setup_entry(hass: HomeAssistant, entry, async_add_entities):
 
 
 class CezCumulativeEnergySensor(CoordinatorEntity, SensorEntity):
-    """Cumulative meter reading for NT, VT, or Total (TOTAL_INCREASING)."""
+    """Cumulative meter reading for NT, VT, or Total (TOTAL_INCREASING).
+
+    Shows the authoritative daily base reading plus intraday estimates from
+    15-min interval data, so the value ticks up throughout the day.  When
+    the daily coordinator refreshes (typically once a day) the base is
+    realigned to the authoritative meter reading.
+    """
 
     _attr_device_class = SensorDeviceClass.ENERGY
     _attr_native_unit_of_measurement = UnitOfEnergy.KILO_WATT_HOUR
@@ -54,32 +60,67 @@ class CezCumulativeEnergySensor(CoordinatorEntity, SensorEntity):
         name: str,
         unique_id: str,
     ) -> None:
-        super().__init__(hub.daily_coordinator)
+        super().__init__(hub.realtime_coordinator)
         self._hub = hub
         self._kind = kind
         self._attr_name = name
         self._attr_unique_id = unique_id
         self._attr_device_info = hub.device_info
+        self._unsub_daily: Optional[Callable] = None
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        # Also refresh when the daily coordinator gets new authoritative data.
+        @callback
+        def _on_daily_update() -> None:
+            self.async_write_ha_state()
+
+        self._unsub_daily = self._hub.daily_coordinator.async_add_listener(
+            _on_daily_update
+        )
+
+    async def async_will_remove_from_hass(self) -> None:
+        await super().async_will_remove_from_hass()
+        if self._unsub_daily:
+            self._unsub_daily()
+            self._unsub_daily = None
 
     @property
     def native_value(self) -> Optional[float]:
-        data: Optional[DailyData] = self.coordinator.data
-        if not data:
+        daily: Optional[DailyData] = self._hub.daily_coordinator.data
+        realtime: Optional[RealtimeData] = self.coordinator.data
+
+        base = None
+        if daily:
+            if self._kind == "nt":
+                base = daily.cumulative_nt
+            elif self._kind == "vt":
+                base = daily.cumulative_vt
+            elif self._kind == "total":
+                base = daily.cumulative_total
+
+        if base is None:
             return None
-        if self._kind == "nt":
-            return _round(data.cumulative_nt)
-        elif self._kind == "vt":
-            return _round(data.cumulative_vt)
-        elif self._kind == "total":
-            return _round(data.cumulative_total)
-        return None
+
+        intraday = 0.0
+        if realtime:
+            if self._kind == "nt":
+                intraday = realtime.nt_kwh
+            elif self._kind == "vt":
+                intraday = realtime.vt_kwh
+            elif self._kind == "total":
+                intraday = realtime.total_kwh
+
+        return _round(base + intraday)
 
     @property
     def extra_state_attributes(self) -> Dict[str, Any]:
-        data: Optional[DailyData] = self.coordinator.data
+        daily: Optional[DailyData] = self._hub.daily_coordinator.data
+        realtime: Optional[RealtimeData] = self.coordinator.data
         return {
             "electrometer_id": self._hub.electrometer_id,
-            "last_updated": str(data.last_updated) if data and data.last_updated else None,
+            "daily_base_updated": str(daily.last_updated) if daily and daily.last_updated else None,
+            "realtime_updated": str(realtime.last_updated) if realtime and realtime.last_updated else None,
         }
 
 

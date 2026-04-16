@@ -21,7 +21,10 @@ def _setup_ha_mocks():
     sys.modules["homeassistant"] = ha
 
     # homeassistant.core
-    ha_core = _make_module("homeassistant.core", HomeAssistant=MagicMock)
+    def _callback_decorator(func):
+        return func
+
+    ha_core = _make_module("homeassistant.core", HomeAssistant=MagicMock, callback=_callback_decorator)
     sys.modules["homeassistant.core"] = ha_core
 
     # homeassistant.const
