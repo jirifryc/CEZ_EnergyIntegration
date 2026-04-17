@@ -101,6 +101,13 @@ def _setup_ha_mocks():
     sys.modules["homeassistant.components.sensor"] = ha_sensor
     sys.modules["homeassistant.components"] = _make_module("homeassistant.components")
 
+    # homeassistant.components.button
+    ha_button = _make_module(
+        "homeassistant.components.button",
+        ButtonEntity=type("ButtonEntity", (), {}),
+    )
+    sys.modules["homeassistant.components.button"] = ha_button
+
     # homeassistant.components.binary_sensor
     class FakeBSDeviceClass:
         POWER = "power"

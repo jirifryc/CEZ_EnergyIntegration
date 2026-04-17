@@ -38,7 +38,7 @@ from .rest_client.pnd_client import CezPndRestClient
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS = ["sensor", "binary_sensor", "calendar"]
+PLATFORMS = ["sensor", "binary_sensor", "calendar", "button"]
 
 
 @dataclass
@@ -472,14 +472,14 @@ class CezEnergyHub:
     async def async_setup(self) -> None:
         await self._login_and_load()
 
-        # --- Realtime coordinator (15-min interval data) ---
+        # --- Interval coordinator (15-min interval data for yesterday) ---
         async def _update_realtime() -> RealtimeData:
             def _blocking():
                 today = dt.date.today()
-                tomorrow = today + dt.timedelta(days=1)
+                yesterday = today - dt.timedelta(days=1)
                 try:
                     raw = self._pnd_client.get_interval_data(
-                        self.electrometer_id, today, tomorrow
+                        self.electrometer_id, yesterday, today
                     )
                     intervals = CezPndRestClient.parse_interval_series(raw)
                 except Exception as e:
